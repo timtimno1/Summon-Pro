@@ -25,6 +25,7 @@ import webbrowser
 from pathlib import Path
 
 DEFAULT_AUTH_BASE = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3"
+DEFAULT_AUDIENCE = "https://fleet-api.prd.na.vn.cloud.tesla.com"
 DEFAULT_SCOPES = "openid offline_access vehicle_device_data vehicle_location"
 
 
@@ -38,7 +39,13 @@ def create_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def receive_code(redirect_uri: str, expected_state: str, timeout: int) -> str:
+def open_authorization(authorize_url: str) -> None:
+    print("Opening Tesla authorization page...", file=sys.stderr)
+    if not webbrowser.open(authorize_url):
+        print(authorize_url, file=sys.stderr)
+
+
+def receive_code(redirect_uri: str, expected_state: str, timeout: int, authorize_url: str) -> str:
     parsed = urllib.parse.urlparse(redirect_uri)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ValueError("TESLA_REDIRECT_URI must be an http://localhost URL")
@@ -72,6 +79,8 @@ def receive_code(redirect_uri: str, expected_state: str, timeout: int) -> str:
 
     with socketserver.TCPServer((parsed.hostname, parsed.port or 80), CallbackHandler) as server:
         server.timeout = timeout
+        # Bind the callback port before the browser can redirect back to it.
+        open_authorization(authorize_url)
         server.handle_request()
     if "code" not in result:
         raise RuntimeError(result.get("error", "Timed out waiting for Tesla authorization"))
@@ -97,17 +106,9 @@ def exchange_code(
     redirect_uri: str,
     code: str,
     verifier: str,
+    audience: str,
 ) -> dict[str, object]:
-    form = urllib.parse.urlencode(
-        {
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "code_verifier": verifier,
-        }
-    ).encode("ascii")
+    form = build_token_form(client_id, client_secret, redirect_uri, code, verifier, audience)
     request = urllib.request.Request(
         token_url,
         data=form,
@@ -120,6 +121,27 @@ def exchange_code(
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Tesla token exchange failed ({error.code}): {detail}") from error
+
+
+def build_token_form(
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    code: str,
+    verifier: str,
+    audience: str,
+) -> bytes:
+    return urllib.parse.urlencode(
+        {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+            "audience": audience.rstrip("/"),
+        }
+    ).encode("ascii")
 
 
 def write_private_json(path: Path, payload: dict[str, object]) -> None:
@@ -135,6 +157,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("tesla-token.json"))
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument(
+        "--audience",
+        default=os.environ.get("TESLA_FLEET_API_AUDIENCE", DEFAULT_AUDIENCE),
+        help="regional Fleet API URL; must match the Android fleetApiBaseUrl",
+    )
     parser.add_argument(
         "--manual",
         action="store_true",
@@ -162,15 +189,21 @@ def main() -> int:
             "code_challenge_method": "S256",
         }
     )
-    print("Opening Tesla authorization page...", file=sys.stderr)
-    if not webbrowser.open(authorize_url):
-        print(authorize_url, file=sys.stderr)
     if args.manual:
+        open_authorization(authorize_url)
         redirected_url = input("Paste the complete final redirect URL: ").strip()
         code = parse_redirect_url(redirected_url, state)
     else:
-        code = receive_code(redirect_uri, state, args.timeout)
-    token = exchange_code(auth_base + "/token", client_id, client_secret, redirect_uri, code, verifier)
+        code = receive_code(redirect_uri, state, args.timeout, authorize_url)
+    token = exchange_code(
+        auth_base + "/token",
+        client_id,
+        client_secret,
+        redirect_uri,
+        code,
+        verifier,
+        args.audience,
+    )
     write_private_json(args.output, token)
     print(f"Token response saved with mode 0600: {args.output}")
     print("Import the access_token value into Summon Pro, then delete the file when finished.")

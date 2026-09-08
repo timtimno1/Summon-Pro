@@ -1,8 +1,11 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
 }
+
+val mapsApiKey = providers.gradleProperty("mapsApiKey")
+    .orElse(providers.environmentVariable("MAPS_API_KEY"))
+    .orElse("DEFAULT_API_KEY")
 
 android {
     namespace = "com.justjdupuis.summonpro"
@@ -16,6 +19,7 @@ android {
         versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey.get()
         buildConfigField(
             "String",
             "FLEET_API_BASE_URL",
@@ -46,11 +50,6 @@ android {
     }
 }
 
-secrets {
-    propertiesFileName = "secrets.properties"
-    defaultPropertiesFileName  = "local.defaults.properties"
-}
-
 dependencies {
 
     implementation("androidx.core:core-ktx:1.9.0")
@@ -75,4 +74,17 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.maps.android:android-maps-utils:2.3.0")
+}
+
+val validateMapsApiKey by tasks.registering {
+    doLast {
+        check(mapsApiKey.get().isNotBlank() && mapsApiKey.get() != "DEFAULT_API_KEY") {
+            "A Google Maps API key is required. Set mapsApiKey in ~/.gradle/gradle.properties " +
+                "or export MAPS_API_KEY before building."
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(validateMapsApiKey)
 }

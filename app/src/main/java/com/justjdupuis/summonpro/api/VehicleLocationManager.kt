@@ -13,7 +13,8 @@ import java.util.concurrent.CopyOnWriteArraySet
 
 /** Lifecycle-aware direct Fleet API location poller shared by the map and service. */
 object VehicleLocationManager {
-    private const val POLL_INTERVAL_MS = 10_000L
+    // Global mode has a 5.8 m radius, so location updates cannot be spaced by several seconds.
+    private const val POLL_INTERVAL_MS = 1_000L
     private const val MAX_LOCATION_AGE_MS = 120_000L
     private const val MAX_CONSECUTIVE_FAILURES = 3
     private const val TAG = "LocationPoller"
@@ -69,6 +70,7 @@ object VehicleLocationManager {
                         latitude = null
                         longitude = null
                         listeners.forEach { it.onFailure(t) }
+                        break
                     }
                     delay((POLL_INTERVAL_MS * consecutiveFailures).coerceAtMost(30_000L))
                 }

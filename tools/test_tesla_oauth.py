@@ -3,6 +3,7 @@ import os
 import stat
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 import tesla_oauth
@@ -29,6 +30,13 @@ class TeslaOauthTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             tesla_oauth.parse_redirect_url("https://example.test/cb?code=abc&state=bad", "good")
+
+    def test_token_form_includes_normalized_fleet_api_audience(self) -> None:
+        encoded = tesla_oauth.build_token_form(
+            "client", "secret", "http://localhost/cb", "code", "verifier", "https://fleet.example/"
+        )
+        form = urllib.parse.parse_qs(encoded.decode("ascii"))
+        self.assertEqual(form["audience"], ["https://fleet.example"])
 
 
 if __name__ == "__main__":

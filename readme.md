@@ -73,6 +73,7 @@ This fork connects directly to Tesla Fleet API and no longer calls
    export TESLA_CLIENT_ID='your-client-id'
    export TESLA_CLIENT_SECRET='your-client-secret'
    export TESLA_REDIRECT_URI='http://127.0.0.1:8765/callback'
+   export TESLA_FLEET_API_AUDIENCE='https://fleet-api.prd.na.vn.cloud.tesla.com'
    python3 tools/tesla_oauth.py
    ```
 
@@ -82,19 +83,29 @@ This fork connects directly to Tesla Fleet API and no longer calls
    developer console does not accept a localhost redirect for your application,
    register an HTTPS redirect, run the helper with `--manual`, and paste the final
    redirect URL from the browser. Do not put the client secret in the APK.
-3. Set the Fleet API region in `~/.gradle/gradle.properties` when North America is
-   not appropriate, for example:
+3. Add a restricted Google Maps Android API key and the Fleet API region to
+   `~/.gradle/gradle.properties`:
 
    ```properties
-   fleetApiBaseUrl=https://fleet-api.prd.eu.vn.cloud.tesla.com/
+   mapsApiKey=your-google-maps-android-key
+   fleetApiBaseUrl=https://fleet-api.prd.na.vn.cloud.tesla.com/
    ```
+
+   Alternatively, export `MAPS_API_KEY` for the build. The build fails early
+   when no real Maps key is configured, rather than producing an APK with a
+   nonfunctional route-planning map. Restrict the key to your Android package
+   name and signing certificate in Google Cloud Console.
+
+   The OAuth helper's `TESLA_FLEET_API_AUDIENCE` must be the same regional URL
+   as `fleetApiBaseUrl` (a trailing slash is optional for the helper).
 
 4. Build and install the app, then choose **Import Tesla access token**. Tokens
    are encrypted with an Android Keystore key, excluded from Android backup, and
    must be imported again after expiration.
 
-Vehicle location is polled directly every ten seconds. The app rejects location
-data older than two minutes and stops the mock-location service after three
+Vehicle location is polled directly every second so that the 5.8 m global-mode
+geofence is not fed a position that is several seconds behind. The app rejects
+location data older than two minutes and stops the mock-location service after three
 consecutive failures. This mode does not configure Fleet Telemetry and does not
 refresh tokens because those operations require credentials that must not be
 embedded in an APK.
