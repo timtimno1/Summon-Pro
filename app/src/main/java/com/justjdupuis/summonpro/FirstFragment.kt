@@ -28,22 +28,18 @@ import com.google.android.gms.maps.model.Marker
 import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.maps.model.Polyline
 import com.google.android.gms.maps.model.PolylineOptions
-import com.justjdupuis.summonpro.api.TelemetryApi
-import com.justjdupuis.summonpro.api.WebSocketManager
+import com.justjdupuis.summonpro.api.VehicleLocationManager
 import com.justjdupuis.summonpro.databinding.FragmentFirstBinding
-import com.justjdupuis.summonpro.models.TelemetryConn
 import com.justjdupuis.summonpro.utils.Carpenter
 import com.justjdupuis.summonpro.utils.LocationStore
 import com.justjdupuis.summonpro.utils.TokenStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
  * A simple [Fragment] subclass as the default destination in the navigation.
  */
 class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListener,
-    WebSocketManager.WebSocketEventListener {
+    VehicleLocationManager.Listener {
 
     private lateinit var permMgr: PermissionManager
     private var _binding: FragmentFirstBinding? = null
@@ -95,7 +91,7 @@ class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListen
             return
         }
 
-        WebSocketManager.vin = vin
+        VehicleLocationManager.vin = vin
         binding.btnUndo.setOnClickListener {
             if (SummonForegroundService.isRunning) {
                 Toast.makeText(requireContext(), "Stop Summon Service to remove path", Toast.LENGTH_SHORT).show()
@@ -127,18 +123,14 @@ class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListen
 
         lifecycleScope.launch {
             try {
-                val registrationService = TelemetryApi.service.registerTelemetry(token, vin)
-                WebSocketManager.close()
-                WebSocketManager.connect(
-                    registrationService.serviceUrl,
-                    registrationService.serviceToken
-                )
+                VehicleLocationManager.close()
+                VehicleLocationManager.connect(vin, token)
             } catch (e: Exception) {
                 showAlert(
                     "Cannot stream GPS",
-                    "Sorry but we were unable to setup telemetry streaming from your vehicle."
+                    "Unable to start direct location polling from your vehicle."
                 )
-                Log.e("FirstFragment", "onViewCreated failed to registerTelemetry", e)
+                Log.e("FirstFragment", "Failed to start location polling", e)
             }
         }
     }
@@ -233,32 +225,30 @@ class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListen
 
 
     override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-
-        if (!SummonForegroundService.isRunning && WebSocketManager.isConnected()) {
-            WebSocketManager.close()
-            CoroutineScope(Dispatchers.IO).launch {
-                unregisterTelemetry()
-            }
+        if (!SummonForegroundService.isRunning && VehicleLocationManager.isConnected()) {
+            VehicleLocationManager.close()
         }
+        _binding = null
+        super.onDestroyView()
     }
 
     override fun onStart() {
-        WebSocketManager.addListener(this)
+        VehicleLocationManager.addListener(this)
         super.onStart()
     }
 
     override fun onStop() {
         super.onStop()
-        WebSocketManager.removeListener(this)
+        VehicleLocationManager.removeListener(this)
     }
 
     override fun onOpen() {
-        requireActivity().runOnUiThread {
-            binding.statusDot.background =
-                ContextCompat.getDrawable(requireContext(), R.drawable.status_circle_yellow)
-            binding.statusText.text = "Connecting"
+        val activity = activity ?: return
+        activity.runOnUiThread {
+            val currentBinding = _binding ?: return@runOnUiThread
+            currentBinding.statusDot.background =
+                ContextCompat.getDrawable(activity, R.drawable.status_circle_yellow)
+            currentBinding.statusText.text = "Connecting"
         }
     }
 
@@ -266,64 +256,54 @@ class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListen
         val latLng = LatLng(latitude, longitude)
 
         if (!SummonForegroundService.isRunning) {
-            LocationStore.saveLocation(requireContext(), latitude, longitude)
+            context?.let { LocationStore.saveLocation(it, latitude, longitude) }
         }
 
+        val wasConnected = isConnected
         isConnected = true
-        requireActivity().runOnUiThread {
+        val activity = activity ?: return
+        activity.runOnUiThread {
+            val currentBinding = _binding ?: return@runOnUiThread
             vehicleMarker?.position = latLng
-            if (!isConnected) {
+            if (!wasConnected) {
                 map.animateCamera(CameraUpdateFactory.newLatLng(latLng))
                 updateVehicleIcon(true)
             }
 
-            binding.statusDot.background = ContextCompat.getDrawable(requireContext(), R.drawable.status_circle_green)
-            binding.statusText.text = "Connected"
+            currentBinding.statusDot.background = ContextCompat.getDrawable(activity, R.drawable.status_circle_green)
+            currentBinding.statusText.text = "Connected"
         }
     }
 
     override fun onNewHeading(heading: Double) {
-        requireActivity().runOnUiThread {
+        activity?.runOnUiThread {
             vehicleMarker?.rotation = heading.toFloat()
         }
 
         if (!SummonForegroundService.isRunning) {
-            LocationStore.saveHeading(requireContext(), heading)
-        }
-    }
-
-    override fun onConnectivityUpdate(connectivity: TelemetryConn) {
-        isConnected = connectivity.status == "CONNECTED"
-
-        requireActivity().runOnUiThread {
-            updateVehicleIcon(isConnected)
-
-            val statusDrawable = if (isConnected) {
-                R.drawable.status_circle_green
-            } else {
-                R.drawable.status_circle_red
-            }
-
-            binding.statusDot.background = ContextCompat.getDrawable(requireContext(), statusDrawable)
-            binding.statusText.text = if (isConnected) "Connected" else "Disconnected"
+            context?.let { LocationStore.saveHeading(it, heading) }
         }
     }
 
     override fun onClosed() {
-        requireActivity().runOnUiThread {
-            binding.statusDot.background =
-                ContextCompat.getDrawable(requireContext(), R.drawable.status_circle_red)
-            binding.statusText.text = "Disconnected"
+        val activity = activity ?: return
+        activity.runOnUiThread {
+            val currentBinding = _binding ?: return@runOnUiThread
+            currentBinding.statusDot.background =
+                ContextCompat.getDrawable(activity, R.drawable.status_circle_red)
+            currentBinding.statusText.text = "Disconnected"
             isConnected = false
             updateVehicleIcon(false)
         }
     }
 
     override fun onFailure(t: Throwable) {
-        requireActivity().runOnUiThread {
-            binding.statusDot.background =
-                ContextCompat.getDrawable(requireContext(), R.drawable.status_circle_red)
-            binding.statusText.text = "Failure"
+        val activity = activity ?: return
+        activity.runOnUiThread {
+            val currentBinding = _binding ?: return@runOnUiThread
+            currentBinding.statusDot.background =
+                ContextCompat.getDrawable(activity, R.drawable.status_circle_red)
+            currentBinding.statusText.text = "Failure"
             isConnected = false
             updateVehicleIcon(false)
         }
@@ -339,13 +319,6 @@ class FirstFragment : Fragment(), OnMapReadyCallback, GoogleMap.OnMapClickListen
         val smallBmp = Bitmap.createScaledBitmap(orig, size, size, false)
         val icon = BitmapDescriptorFactory.fromBitmap(smallBmp)
         vehicleMarker?.setIcon(icon)
-    }
-
-    private suspend fun unregisterTelemetry() {
-        runCatching {
-            val token = TokenStore.getAccessToken(requireContext()) ?: return
-            TelemetryApi.service.unregisterTelemetry(token, WebSocketManager.vin.orEmpty())
-        }.onFailure { Log.e("MainActivity", "Unregister telemetry error", it) }
     }
 
     private fun showAlert(title: String, message: String) {

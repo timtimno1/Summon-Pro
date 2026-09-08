@@ -12,16 +12,13 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
-import androidx.navigation.findNavController
+import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceManager
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.SphericalUtil
-import com.justjdupuis.summonpro.api.TelemetryApi
-import com.justjdupuis.summonpro.api.WebSocketManager
-import com.justjdupuis.summonpro.models.TelemetryConn
+import com.justjdupuis.summonpro.api.VehicleLocationManager
 import com.justjdupuis.summonpro.utils.Carpenter
 import com.justjdupuis.summonpro.utils.GeoHelper
-import com.justjdupuis.summonpro.utils.TokenStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,9 +26,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.system.exitProcess
 
-class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListener {
+class SummonForegroundService : Service(), VehicleLocationManager.Listener {
     companion object {
         internal var isRunning = false
         private const val TAG = "SummonForegroundService"
@@ -55,7 +51,7 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         initMockProvider()
         registerScreenOffReceiver()
-        WebSocketManager.addListener(this)
+        VehicleLocationManager.addListener(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -74,7 +70,14 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
         }
 
         startForeground(1, Carpenter.buildNotification(this))
-        onNewLocation(WebSocketManager.latitude!!, WebSocketManager.longitude!!)
+        val latitude = VehicleLocationManager.latitude
+        val longitude = VehicleLocationManager.longitude
+        if (latitude == null || longitude == null) {
+            Log.e(TAG, "Refusing to start without a fresh vehicle location")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        onNewLocation(latitude, longitude)
 
         startMockLoop()
         Toast.makeText(this, "Summon service started", Toast.LENGTH_SHORT).show()
@@ -99,8 +102,8 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
     }
 
     private fun removeMockProvider() {
-        locationManager.setTestProviderEnabled(PROVIDER, false)
-        locationManager.removeTestProvider(PROVIDER)
+        runCatching { locationManager.setTestProviderEnabled(PROVIDER, false) }
+        runCatching { locationManager.removeTestProvider(PROVIDER) }
     }
 
     private fun registerScreenOffReceiver() {
@@ -111,7 +114,12 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
                 }
             }
         }
-        registerReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        ContextCompat.registerReceiver(
+            this,
+            screenOffReceiver,
+            IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
 
     private fun unregisterScreenOffReceiver() {
@@ -121,17 +129,9 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
 
     private fun handleScreenOff() {
         serviceScope.launch {
-            WebSocketManager.close()
-            unregisterTelemetry()
+            VehicleLocationManager.close()
             stopSelf()
         }
-    }
-
-    private suspend fun unregisterTelemetry() {
-        runCatching {
-            val token = TokenStore.getAccessToken(this@SummonForegroundService) ?: return
-            TelemetryApi.service.unregisterTelemetry(token, WebSocketManager.vin.orEmpty())
-        }.onFailure { Log.e(TAG, "Unregister telemetry error", it) }
     }
 
     private fun startMockLoop() {
@@ -176,15 +176,12 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
     override fun onNewHeading(heading: Double) {
     }
 
-    override fun onConnectivityUpdate(connectivity: TelemetryConn) {
-        // TODO update the user with a notification
-
-    }
-
     override fun onClosed() {
     }
 
     override fun onFailure(t: Throwable) {
+        Log.e(TAG, "Stopping because fresh vehicle location is unavailable", t)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -192,7 +189,7 @@ class SummonForegroundService : Service(), WebSocketManager.WebSocketEventListen
         isRunning = false
         Log.d(TAG, "Service destroyed")
         serviceScope.cancel()
-        WebSocketManager.removeListener(this)
+        VehicleLocationManager.removeListener(this)
         unregisterScreenOffReceiver()
         removeMockProvider()
     }

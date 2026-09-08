@@ -5,40 +5,33 @@ package com.justjdupuis.summonpro.utils
 import android.content.Context
 
 object TokenStore {
-    private const val PREFS_NAME = "summonpro_auth"
     private const val KEY_ACCESS = "access_token"
-    private const val KEY_REFRESH = "refresh_token"
     private const val KEY_EXPIRES = "expires_at"
 
-    private fun prefs(ctx: Context) =
-        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-    fun save(ctx: Context, accessToken: String, refreshToken: String?, expiresInSeconds: Long) {
-        prefs(ctx).edit()
-            .putString(KEY_ACCESS, accessToken)
-            .putString(KEY_REFRESH, refreshToken)
-            .putLong(KEY_EXPIRES, System.currentTimeMillis() + expiresInSeconds * 1000)
-            .apply()
+    fun savePersonalAccessToken(ctx: Context, accessToken: String, expiresInSeconds: Long) {
+        val normalized = if (accessToken.startsWith("Bearer ", ignoreCase = true)) {
+            accessToken
+        } else {
+            "Bearer $accessToken"
+        }
+        SecurePreferences.putString(ctx, KEY_ACCESS, normalized)
+        SecurePreferences.putLong(ctx, KEY_EXPIRES, System.currentTimeMillis() + expiresInSeconds * 1000)
     }
 
     fun getAccessToken(ctx: Context): String? {
-        val p = prefs(ctx)
-        val expiresAt = p.getLong(KEY_EXPIRES, 0)
-        val earlyOffset = 4 * 60 * 60 * 1000L
+        val expiresAt = SecurePreferences.getLong(ctx, KEY_EXPIRES, 0)
+        val earlyOffset = 5 * 60 * 1000L
         return if (System.currentTimeMillis() >= (expiresAt - earlyOffset)) {
             null
         } else {
-            p.getString(KEY_ACCESS, null)
+            SecurePreferences.getString(ctx, KEY_ACCESS)
         }
     }
 
-    fun getRefreshToken(ctx: Context): String? =
-        prefs(ctx).getString(KEY_REFRESH, null)
-
     fun clear(ctx: Context) {
-        prefs(ctx).edit().clear().apply()
+        SecurePreferences.clear(ctx)
     }
 
     fun isExpired(ctx: Context): Boolean =
-        System.currentTimeMillis() >= prefs(ctx).getLong(KEY_EXPIRES, 0)
+        System.currentTimeMillis() >= SecurePreferences.getLong(ctx, KEY_EXPIRES, 0)
 }

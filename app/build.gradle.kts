@@ -16,6 +16,11 @@ android {
         versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "FLEET_API_BASE_URL",
+            "\"${providers.gradleProperty("fleetApiBaseUrl").orElse("https://fleet-api.prd.na.vn.cloud.tesla.com/").get()}\""
+        )
     }
 
     buildFeatures {

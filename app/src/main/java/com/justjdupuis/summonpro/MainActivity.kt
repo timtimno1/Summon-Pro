@@ -3,11 +3,12 @@ package com.justjdupuis.summonpro
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.util.Log
 import com.google.android.material.snackbar.Snackbar
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.navigation.findNavController
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.navigateUp
@@ -17,42 +18,29 @@ import android.view.MenuItem
 import android.view.View
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import androidx.navigation.fragment.findNavController
 import androidx.navigation.navOptions
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.justjdupuis.summonpro.api.AuthApi
-import com.justjdupuis.summonpro.api.TelemetryApi
-import com.justjdupuis.summonpro.api.WebSocketManager
+import com.justjdupuis.summonpro.api.VehicleLocationManager
 import com.justjdupuis.summonpro.databinding.ActivityMainBinding
 import com.justjdupuis.summonpro.utils.Carpenter
-import com.justjdupuis.summonpro.utils.TokenStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import retrofit2.HttpException
-import java.io.IOException
 import android.provider.Settings
 import android.widget.Toast
 import android.text.SpannableString
 import android.text.method.LinkMovementMethod
 import android.text.util.Linkify
 import android.widget.TextView
-import com.justjdupuis.summonpro.api.UpdateCheck
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
 
     companion object {
         var currentInstance: MainActivity? = null
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        handleDeepLink(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,6 +52,11 @@ class MainActivity : AppCompatActivity() {
 
         setSupportActionBar(binding.toolbar)
         Carpenter.createNotificationChannel(this);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !PermissionManager.isGranted(this, android.Manifest.permission.POST_NOTIFICATIONS)
+        ) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         val fab = findViewById<FloatingActionButton>(R.id.fab)
@@ -89,14 +82,13 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            if (WebSocketManager.latitude == null || WebSocketManager.longitude == null) {
+            if (VehicleLocationManager.latitude == null || VehicleLocationManager.longitude == null) {
                 Snackbar.make(view, "Cannot start service without initial location", Snackbar.LENGTH_LONG)
                     .setAction("Action", null).show()
                 return@setOnClickListener
             }
 
-            Snackbar.make(view, "YOOOOOOO", Snackbar.LENGTH_LONG)
-                .setAction("Action", null).show()
+            Snackbar.make(view, "Starting personal location service", Snackbar.LENGTH_SHORT).show()
 
             Intent(this, SummonForegroundService::class.java).also { intent ->
                 ContextCompat.startForegroundService(this, intent)
@@ -131,8 +123,7 @@ class MainActivity : AppCompatActivity() {
             - Go to Settings > About phone
             - Tap “Build number” 7 times to unlock it
             
-            Need help? Visit:
-            https://summon-pro.cc/faq
+            Stop immediately if vehicle location becomes stale or unavailable.
             """.trimIndent()
 
         val spannable = SpannableString(message)
@@ -159,69 +150,6 @@ class MainActivity : AppCompatActivity() {
             LinkMovementMethod.getInstance()
     }
 
-    private fun handleDeepLink(intent: Intent?) {
-        val uri = intent?.data ?: return
-        Log.d("OAuth", "deep link: $uri")
-
-        if (isTeslaAuthRedirect(uri)) {
-            val authCode = uri.getQueryParameter("code")
-            val redirectUri = "${uri.scheme}://${uri.authority}${uri.path}"
-
-            if (authCode.isNullOrEmpty()) return
-
-            Log.d("OAuth", "Received code: $authCode")
-            exchangeAuthCode(authCode, redirectUri)
-        }
-    }
-
-    private fun isTeslaAuthRedirect(uri: Uri): Boolean {
-        return uri.scheme == "com.justjdupuis.summonpro" &&
-                uri.host == "login" &&
-                uri.pathSegments.contains("tesla-auth")
-    }
-
-    private fun exchangeAuthCode(authCode: String, redirectUri: String) {
-        lifecycleScope.launch {
-            try {
-                val response = AuthApi.service.loginWithTeslaCode(authCode, redirectUri)
-                TokenStore.save(this@MainActivity, response.encryptedToken, response.encryptedRefreshToken, response.expiresIn)
-                Log.d("OAuth", "Token saved. Expiry: ${response.expiresIn}s")
-                navigateToVehicleList()
-            } catch (e: HttpException) {
-                handleHttpException(e)
-            } catch (e: IOException) {
-                showAlert("Can't reach the server", e.localizedMessage)
-                Log.e("OAuth", "Network error: ${e.localizedMessage}")
-            } catch (e: Exception) {
-                Log.e("OAuth", "Unexpected error", e)
-            }
-        }
-    }
-
-    private fun handleHttpException(e: HttpException) {
-        val code = e.code()
-        val apiError = Carpenter.parseApiError(e.response()?.errorBody())
-
-        if (apiError != null) {
-            Log.e("OAuth", "API Error: ${apiError.code} - ${apiError.message}")
-            showAlert("OAuth Error", apiError.message)
-        } else {
-            Log.e("OAuth", "HTTP $code with unparseable error body")
-        }
-    }
-    private fun showAlert(title: String, message: String) {
-        AlertDialog.Builder(this@MainActivity)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
-            .show()
-    }
-
-    private fun navigateToVehicleList() {
-        val navHostFragment = supportFragmentManager.findFragmentById(R.id.nav_host_fragment_content_main)
-        val navController = navHostFragment?.findNavController()
-        navController?.navigate(R.id.action_WelcomeFragment_to_VehicleList)
-    }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         // Inflate the menu; this adds items to the action bar if it is present.
@@ -246,23 +174,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-
-        lifecycleScope.launch {
-            val updateInfo = UpdateCheck.needUpdate(this@MainActivity)
-            if (updateInfo != null) {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle(updateInfo.title)
-                    .setMessage(updateInfo.changelog)
-                    .setCancelable(false)
-                    .setPositiveButton("Update") { _, _ ->
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(updateInfo.updateUrl))
-                        startActivity(intent)
-                        finish() // block usage until updated
-                    }
-                    .show()
-                return@launch // prevent continuing
-            }
-        }
 
         if (SummonForegroundService.isRunning) {
             Log.d("MainActivity", "onResume — Summon service is running — stay on FirstFragment")
@@ -292,29 +203,16 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
 
-        if (!SummonForegroundService.isRunning && WebSocketManager.isConnected()) {
-            lifecycleScope.launch {
-                WebSocketManager.shutdown()
-                unregisterTelemetry()
-            }
+        if (!SummonForegroundService.isRunning && VehicleLocationManager.isConnected()) {
+            VehicleLocationManager.shutdown()
         }
     }
 
 
     override fun onDestroy() {
         super.onDestroy()
-        if (WebSocketManager.isConnected()) {
-            WebSocketManager.shutdown()
-            CoroutineScope(Dispatchers.IO).launch {
-                unregisterTelemetry()
-            }
+        if (VehicleLocationManager.isConnected()) {
+            VehicleLocationManager.shutdown()
         }
-    }
-
-    private suspend fun unregisterTelemetry() {
-        runCatching {
-            val token = TokenStore.getAccessToken(this) ?: return
-            TelemetryApi.service.unregisterTelemetry(token, WebSocketManager.vin.orEmpty())
-        }.onFailure { Log.e("MainActivity", "Unregister telemetry error", it) }
     }
 }
