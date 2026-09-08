@@ -1,37 +1,23 @@
 package com.justjdupuis.summonpro
 
-import android.content.Intent
-import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
-import android.text.SpannableString
-import android.text.Spanned
-import android.text.TextPaint
-import android.text.method.LinkMovementMethod
-import android.text.style.ClickableSpan
 import androidx.fragment.app.Fragment
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.TextView
-import androidx.browser.customtabs.CustomTabsIntent
-import androidx.core.content.ContextCompat
-import androidx.core.text.HtmlCompat
+import android.text.InputType
+import android.widget.EditText
+import android.widget.LinearLayout
+import androidx.appcompat.app.AlertDialog
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.navigation.navOptions
 import com.justjdupuis.summonpro.databinding.FragmentWelcomeBinding
 import com.justjdupuis.summonpro.utils.TokenStore
+import com.justjdupuis.summonpro.utils.TokenMetadata
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 class WelcomeFragment : Fragment() {
-    companion object {
-        private const val CLIENT_ID = "43b9cc42-e27a-4da7-a7e2-6e93b814dd3b"
-        private const val REDIRECT_URI = "com.justjdupuis.summonpro://login/tesla-auth"
-        private const val SCOPES = "openid offline_access vehicle_location vehicle_device_data"
-    }
-
     private var _binding: FragmentWelcomeBinding? = null
     private val binding get() = _binding!!
     override fun onCreateView(
@@ -45,54 +31,57 @@ class WelcomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        binding.loginButton.setOnClickListener { view ->
-            val authUrl = Uri.parse("https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/authorize").buildUpon()
-                .appendQueryParameter("response_type", "code")
-                .appendQueryParameter("client_id", CLIENT_ID)
-                .appendQueryParameter("redirect_uri", REDIRECT_URI)
-                .appendQueryParameter("scope", SCOPES)
-                .appendQueryParameter("state", UUID.randomUUID().toString())
-                .appendQueryParameter("require_requested_scopes", "true")
-                .appendQueryParameter("show_keypair_step", "true")
-                .build()
+        binding.loginButton.setOnClickListener { showTokenImportDialog() }
+        binding.termsText.text = "Personal mode connects directly to Tesla Fleet API. Tokens stay on this device."
+    }
 
-            val customTabsIntent = CustomTabsIntent.Builder()
-                .build()
-
-            customTabsIntent.launchUrl(requireContext(), authUrl)
+    private fun showTokenImportDialog() {
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val container = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, 0, padding, 0)
         }
+        val tokenInput = EditText(requireContext()).apply {
+            hint = "Tesla Fleet API access token"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val expiryInput = EditText(requireContext()).apply {
+            hint = "Valid for hours"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText("8")
+        }
+        container.addView(tokenInput)
+        container.addView(expiryInput)
 
-        val fullText = "By continuing, you agree to the Terms and Conditions"
-        val spannable = SpannableString(fullText)
-
-        val termsStart = fullText.indexOf("Terms and Conditions")
-        val termsEnd = termsStart + "Terms and Conditions".length
-
-        val clickableSpan = object : ClickableSpan() {
-            override fun onClick(widget: View) {
-                val url = "https://summon-pro.cc/terms"
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                widget.context.startActivity(intent)
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle("Import personal access token")
+            .setMessage("Generate a token with your own Tesla developer application. It is stored only on this device.")
+            .setView(container)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Import", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val token = tokenInput.text.toString().trim()
+                val hours = expiryInput.text.toString().toLongOrNull()
+                if (token.isBlank()) {
+                    tokenInput.error = "Token is required"
+                    return@setOnClickListener
+                }
+                if (hours == null || hours !in 1..24) {
+                    expiryInput.error = "Enter 1 to 24 hours"
+                    return@setOnClickListener
+                }
+                val enteredLifetime = hours * 60 * 60
+                val lifetime = TokenMetadata.expiresInSeconds(token)
+                    ?.coerceAtMost(enteredLifetime)
+                    ?: enteredLifetime
+                TokenStore.savePersonalAccessToken(requireContext(), token, lifetime)
+                dialog.dismiss()
+                findNavController().navigate(R.id.action_WelcomeFragment_to_VehicleList)
             }
-
-            override fun updateDrawState(ds: TextPaint) {
-                super.updateDrawState(ds)
-                ds.isUnderlineText = true // underline
-                ds.color = ContextCompat.getColor(requireContext(), R.color.textSecondary) // or any color
-            }
         }
-
-        spannable.setSpan(clickableSpan, termsStart, termsEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-
-        binding.termsText.text = spannable
-        binding.termsText.movementMethod = LinkMovementMethod.getInstance()
-        binding.termsText.highlightColor = Color.TRANSPARENT
-
-        binding.termsText.setOnClickListener {
-            val url = "https://summon-pro.cc/terms"
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            startActivity(intent)
-        }
+        dialog.show()
     }
 
     override fun onResume() {

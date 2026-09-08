@@ -18,8 +18,6 @@ import androidx.core.os.bundleOf
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.navigation.navOptions
-import com.justjdupuis.summonpro.api.AuthApi
-import com.justjdupuis.summonpro.api.TelemetryApi
 import com.justjdupuis.summonpro.api.TeslaApi
 import com.justjdupuis.summonpro.utils.TokenStore
 import kotlinx.coroutines.launch
@@ -100,15 +98,6 @@ class VehicleListFragment : Fragment() {
 
         lifecycleScope.launch {
             try {
-                val telemetry = TelemetryApi.service.getTelemetryInfo(token, vehicle.vin)
-                if (telemetry.limitReached) {
-                    showAlert(
-                        "Telemetry Limit Reached",
-                        "This vehicle has reached the maximum number of telemetry configurations allowed by Tesla (3 per vehicle). You cannot add new streaming access at this time.\n\nPlease remove an existing telemetry app from your Tesla before trying again."
-                    )
-                    return@launch
-                }
-
                 val car = TeslaApi.service.getVehicleInfo(token, vehicle.vin)
                 if (car.response.state != "online") {
                     showAlert(
@@ -123,13 +112,7 @@ class VehicleListFragment : Fragment() {
                     "displayName" to vehicle.displayName
                 )
 
-                val destination = if (telemetry.keyPaired) {
-                    R.id.action_VehicleListFragment_to_FirstFragment
-                } else {
-                    R.id.action_VehicleListFragment_to_VirtualKeyIntroFragment
-                }
-
-                findNavController().navigate(destination, bundle)
+                findNavController().navigate(R.id.action_VehicleListFragment_to_FirstFragment, bundle)
             } catch (e: Exception) {
                 handleApiError(e)
                 Log.e("VehicleListFragment", "Failed to handle vehicle click", e)
@@ -181,4 +164,3 @@ class VehicleListFragment : Fragment() {
         recyclerView.visibility = View.VISIBLE
     }
 }
-

@@ -16,10 +16,6 @@
             app:destination="@id/VehicleListFragment" />
 
         <action
-            android:id="@+id/action_WelcomeFragment_to_VirtualKeyFragment"
-            app:destination="@id/VirtualKeyIntroFragment" />
-
-        <action
             android:id="@+id/action_WelcomeFragment_to_FirstFragment"
             app:destination="@id/FirstFragment" />
     </fragment>
@@ -31,22 +27,7 @@
         tools:layout="@layout/fragment_vehicle">
 
         <action
-            android:id="@+id/action_VehicleListFragment_to_VirtualKeyIntroFragment"
-            app:destination="@id/VirtualKeyIntroFragment" />
-
-        <action
             android:id="@+id/action_VehicleListFragment_to_FirstFragment"
-            app:destination="@id/FirstFragment" />
-    </fragment>
-
-    <fragment
-        android:id="@+id/VirtualKeyIntroFragment"
-        android:name="com.justjdupuis.summonpro.VirtualKeyIntroFragment"
-        android:label="Virtual Key Intro"
-        tools:layout="@layout/fragment_virtual_key_intro">
-
-        <action
-            android:id="@+id/action_VirtualKeyIntroFragment_to_FirstFragment"
             app:destination="@id/FirstFragment" />
     </fragment>
 
