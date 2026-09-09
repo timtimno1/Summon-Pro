@@ -20,6 +20,7 @@ import androidx.navigation.fragment.findNavController
 import androidx.navigation.navOptions
 import com.justjdupuis.summonpro.api.TeslaApi
 import com.justjdupuis.summonpro.utils.TokenStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
@@ -69,7 +70,7 @@ class VehicleListFragment : Fragment() {
     private fun loadVehicles() {
         showLoading()
 
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             val token = TokenManager.getValidAccessToken(requireContext()) ?: run {
                 replaceScreenLogin()
                 return@launch
@@ -81,10 +82,13 @@ class VehicleListFragment : Fragment() {
                 vehicleList.addAll(response.response)
                 adapter.notifyDataSetChanged()
                 hideLoading()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                handleApiError(e)
                 Log.e("VehicleListFragment", "loadVehicles() Failed", e)
-                showError("Failed to load vehicles")
+                if (!handleApiError(e)) {
+                    showApiError("Failed to load vehicles", e)
+                }
             }
         }
     }
@@ -96,7 +100,7 @@ class VehicleListFragment : Fragment() {
             return
         }
 
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val car = TeslaApi.service.getVehicleInfo(token, vehicle.vin)
                 if (car.response.state != "online") {
@@ -113,21 +117,51 @@ class VehicleListFragment : Fragment() {
                 )
 
                 findNavController().navigate(R.id.action_VehicleListFragment_to_FirstFragment, bundle)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                handleApiError(e)
                 Log.e("VehicleListFragment", "Failed to handle vehicle click", e)
-                showError("Failed to load vehicle")
+                if (!handleApiError(e)) {
+                    showApiError("Failed to load vehicle", e)
+                }
             }
         }
     }
 
-    private fun handleApiError(e: Exception) {
+    private fun handleApiError(e: Exception): Boolean {
         if (e is HttpException && e.code() == 401) {
             Log.w("Auth", "401: Unauthorized – likely invalid or expired token")
             isLoggedOut = true
             TokenStore.clear(requireContext())
+            hideLoading()
+            Toast.makeText(
+                requireContext(),
+                "Tesla token expired or invalid (HTTP 401). Import a new access token.",
+                Toast.LENGTH_LONG
+            ).show()
             replaceScreenLogin()
+            return true
         }
+        return false
+    }
+
+    private fun showApiError(title: String, e: Exception) {
+        hideLoading()
+        val message = if (e is HttpException) {
+            val hint = when (e.code()) {
+                403 -> "Check the Tesla account's authorization for this app and the granted scopes."
+                406 -> "Check that the request includes Content-Type: application/json."
+                412 -> "Check the app's public key hosting and Fleet API partner account registration in this region."
+                421 -> "Check that the app's Fleet API region matches the account and access token."
+                429 -> "Tesla has limited requests. Wait before trying again."
+                else -> "Check the Fleet API configuration or try again later."
+            }
+            "Tesla Fleet API returned HTTP ${e.code()}.\n\n$hint"
+        } else {
+            "Request failed (${e.javaClass.simpleName}). Check the network connection or response format."
+        }
+        // Do not display or log tokens, request headers, or raw response bodies.
+        showAlert(title, message)
     }
 
     private fun replaceScreenLogin() {

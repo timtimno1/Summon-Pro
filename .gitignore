@@ -6,6 +6,7 @@ build/
 local.properties
 secrets.properties
 tesla-token.json
+private-key.pem
 __pycache__/
 *.py[cod]
 

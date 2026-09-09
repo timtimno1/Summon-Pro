@@ -6,6 +6,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.Headers
 import retrofit2.http.Path
 
 object TeslaApi {
@@ -15,17 +16,20 @@ object TeslaApi {
         .build()
 
     interface Service {
+        @Headers("Content-Type: application/json")
         @GET("api/1/vehicles")
         suspend fun getVehicleList(
             @Header("Authorization") token: String,
         ): VehicleListResponse
 
+        @Headers("Content-Type: application/json")
         @GET("api/1/vehicles/{vehicle_tag}")
         suspend fun getVehicleInfo(
             @Header("Authorization") token: String,
             @Path("vehicle_tag") vehicleTag: String,
         ): VehicleResponse
 
+        @Headers("Content-Type: application/json")
         @GET("api/1/vehicles/{vehicle_tag}/vehicle_data?endpoints=location_data")
         suspend fun getVehicleLocation(
             @Header("Authorization") token: String,
