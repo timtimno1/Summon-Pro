@@ -24,7 +24,9 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-DEFAULT_AUTH_BASE = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3"
+# Browser authorization and server-side token exchange use different hosts.
+DEFAULT_AUTH_BASE = "https://auth.tesla.com/oauth2/v3"
+DEFAULT_TOKEN_BASE = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3"
 DEFAULT_AUDIENCE = "https://fleet-api.prd.na.vn.cloud.tesla.com"
 DEFAULT_SCOPES = "openid offline_access vehicle_device_data vehicle_location"
 
@@ -173,6 +175,7 @@ def main() -> int:
     client_secret = os.environ.get("TESLA_CLIENT_SECRET", "")
     redirect_uri = os.environ.get("TESLA_REDIRECT_URI", "http://127.0.0.1:8765/callback")
     auth_base = os.environ.get("TESLA_AUTH_BASE_URL", DEFAULT_AUTH_BASE).rstrip("/")
+    token_base = os.environ.get("TESLA_TOKEN_BASE_URL", DEFAULT_TOKEN_BASE).rstrip("/")
     if not client_id or not client_secret:
         parser.error("TESLA_CLIENT_ID and TESLA_CLIENT_SECRET are required")
 
@@ -196,7 +199,7 @@ def main() -> int:
     else:
         code = receive_code(redirect_uri, state, args.timeout, authorize_url)
     token = exchange_code(
-        auth_base + "/token",
+        token_base + "/token",
         client_id,
         client_secret,
         redirect_uri,

@@ -56,17 +56,67 @@ region, scopes, and vehicle response format before relying on it.
 1. Enable Developer Mode on your Android phone  
    *(Settings → About Phone → Tap Build Number 7x)*  
 2. Go to **Developer options** → Select mock location app → choose **Summon Pro**
-3. Generate a short-lived token with `tools/tesla_oauth.py` and import it
+3. Complete the [Fleet API setup below](#personal-mode-no-summon-pro-backend),
+   then generate a short-lived token with `tools/tesla_oauth.py` and import it
 4. Select your vehicle and start the service
 5. Open the Tesla app → Use Smart Summon as usual
 
 ### Personal mode (no Summon Pro backend)
 
 This fork connects directly to Tesla Fleet API and no longer calls
-`gate.summon-pro.cc`. Before building it:
+`gate.summon-pro.cc`. It still requires an HTTPS site for the developer
+application's public key and one-time registration with Tesla. The OAuth helper
+only obtains a user token; it does **not** host a key or register the application.
+Before building it:
 
-1. Create and configure your own Tesla developer application.
-2. Register `http://127.0.0.1:8765/callback` as an allowed redirect URI, then
+1. Create and configure your own Tesla developer application. Enable access to
+   vehicle information (`vehicle_device_data`) and vehicle location
+   (`vehicle_location`). Set its allowed origin to your own HTTPS application
+   domain.
+2. Generate an EC key pair using OpenSSL:
+
+   ```bash
+   openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
+   openssl ec -in private-key.pem -pubout -out public-key.pem
+   ```
+
+   Keep `private-key.pem` private and out of Git. Host only the contents of
+   `public-key.pem` at:
+
+   ```text
+   https://YOUR_APP_DOMAIN/.well-known/appspecific/com.tesla.3p.public-key.pem
+   ```
+
+   The public key must remain available there. This application/domain setup is
+   separate from pairing a phone key to the vehicle. See Tesla's
+   [Fleet API onboarding guide](https://developer.tesla.com/docs/fleet-api/getting-started/what-is-fleet-api).
+3. Complete the [partner account registration](https://developer.tesla.com/docs/fleet-api/endpoints/partner-endpoints#register)
+   for the Fleet API region you will use. First obtain a
+   [partner token](https://developer.tesla.com/docs/fleet-api/authentication/partner-tokens)
+   using `grant_type=client_credentials`, your client ID and secret, and the
+   regional Fleet API URL as `audience`. Then send this request with that partner
+   token (replace `YOUR_APP_DOMAIN` with your actual hostname, without a scheme
+   or path):
+
+   ```http
+   POST https://fleet-api.prd.na.vn.cloud.tesla.com/api/1/partner_accounts
+   Authorization: Bearer YOUR_PARTNER_TOKEN
+   Content-Type: application/json
+
+   {"domain":"YOUR_APP_DOMAIN"}
+   ```
+
+   Confirm that the registration request succeeds before continuing. The
+   `register` operation's URL is `/api/1/partner_accounts`, with no `/register`
+   suffix. Its domain must match the developer application's allowed origin as
+   described by Tesla. Registration is required for general Fleet API access,
+   including reading the vehicle list. It must be completed in each region used.
+   Japan and Taiwan use the `na` endpoint above, along with other Asia-Pacific
+   countries excluding China; see [regions](https://developer.tesla.com/docs/fleet-api/getting-started/regions-countries).
+
+   The partner token is for this setup step. For personal access in the Android
+   app, obtain a **user-authorized access token** in the next step.
+4. Register `http://127.0.0.1:8765/callback` as an allowed redirect URI, then
    run the local OAuth helper (credentials remain on your computer):
 
    ```bash
@@ -83,7 +133,22 @@ This fork connects directly to Tesla Fleet API and no longer calls
    developer console does not accept a localhost redirect for your application,
    register an HTTPS redirect, run the helper with `--manual`, and paste the final
    redirect URL from the browser. Do not put the client secret in the APK.
-3. Add a restricted Google Maps Android API key and the Fleet API region to
+
+   In the browser, sign in to the same Tesla account used in the official Tesla
+   app and grant the vehicle information/location permissions. These two OAuth
+   operations use different hosts, per Tesla's
+   [third-party token documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens):
+
+   | Operation | Endpoint |
+   | --- | --- |
+   | Browser login and consent | `https://auth.tesla.com/oauth2/v3/authorize` |
+   | Authorization code/token exchange | `https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token` |
+
+   The helper uses these defaults. If you previously set `TESLA_AUTH_BASE_URL`,
+   it now controls only the browser authorization base URL.
+   `TESLA_TOKEN_BASE_URL` independently controls token exchange; leave both
+   unset for normal use. Neither base URL should include `/authorize` or `/token`.
+5. Add a restricted Google Maps Android API key and the Fleet API region to
    `~/.gradle/gradle.properties`:
 
    ```properties
@@ -99,7 +164,7 @@ This fork connects directly to Tesla Fleet API and no longer calls
    The OAuth helper's `TESLA_FLEET_API_AUDIENCE` must be the same regional URL
    as `fleetApiBaseUrl` (a trailing slash is optional for the helper).
 
-4. Build and install the app, then choose **Import Tesla access token**. Tokens
+6. Build and install the app, then choose **Import Tesla access token**. Tokens
    are encrypted with an Android Keystore key, excluded from Android backup, and
    must be imported again after expiration.
 
@@ -109,6 +174,33 @@ location data older than two minutes and stops the mock-location service after t
 consecutive failures. This mode does not configure Fleet Telemetry and does not
 refresh tokens because those operations require credentials that must not be
 embedded in an APK.
+
+### Vehicle list troubleshooting
+
+Entering **Select Vehicle** after importing a token only confirms local storage;
+the API request is the first server-side validation. Phone-key pairing is not a
+prerequisite for the vehicle-list request. The updated app displays an HTTP code
+and a setup hint when Tesla rejects the request:
+
+| Error | What to check |
+| --- | --- |
+| HTTP 401 | The access token may be invalid or expired. Complete OAuth again and import the new `access_token`. |
+| HTTP 403 | Check the account's third-party app authorization and granted scopes. |
+| HTTP 406 | Requests must include `Content-Type: application/json`; this version sends it on all Fleet API calls. |
+| HTTP 412 | Check the hosted public key and partner account registration for this region. Creating credentials or obtaining a token alone does not complete registration. |
+| HTTP 421 | Check the Fleet API region and token audience. |
+| HTTP 429 | Wait before retrying; Tesla has limited requests. |
+
+These are checks, not a diagnosis from a generic error toast. Other network or
+response-parsing failures display the exception type. Share the error code or a
+screenshot of the error dialog, not access tokens or client secrets. See Tesla's
+[request conventions](https://developer.tesla.com/docs/fleet-api/getting-started/conventions)
+for error-code definitions.
+
+An existing installed APK will not change when GitHub files change. Rebuild and
+install this version to get the new request headers and error messages. The
+registration and OAuth corrections also need to be completed separately; a new
+APK cannot perform missing account setup on its own.
 
 ---
 
